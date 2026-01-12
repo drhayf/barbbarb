@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { ActivityType } from '@/lib/db/schema';
 import { getActivityLogs } from '@/lib/db/queries';
+import { formatDate } from '@/lib/utils';
 
 const iconMap: Record<ActivityType, LucideIcon> = {
   [ActivityType.SIGN_UP]: UserPlus,
@@ -38,7 +39,7 @@ function getRelativeTime(date: Date) {
     return `${Math.floor(diffInSeconds / 3600)} hours ago`;
   if (diffInSeconds < 604800)
     return `${Math.floor(diffInSeconds / 86400)} days ago`;
-  return date.toLocaleDateString();
+  return formatDate(date);
 }
 
 function formatAction(action: ActivityType): string {

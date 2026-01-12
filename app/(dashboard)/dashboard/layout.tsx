@@ -4,7 +4,53 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Users, Settings, Shield, Activity, Menu } from 'lucide-react';
+import {
+  Users,
+  Settings,
+  Shield,
+  Activity,
+  Menu,
+  Calendar,
+  ShoppingBag,
+  Scissors,
+  LayoutDashboard,
+  Megaphone
+} from 'lucide-react';
+import useSWR from 'swr';
+import { User, UserRole } from '@/lib/db/schema';
+
+const fetcher = (url: string) => fetch(url).then((res) => res.json());
+
+// Navigation configuration by role
+const navConfig = {
+  [UserRole.OWNER]: [
+    { href: '/dashboard/owner', icon: LayoutDashboard, label: 'Overview' },
+    { href: '/dashboard/owner/feed', icon: Megaphone, label: 'Shop Feed' },
+    { href: '/dashboard/owner/staff', icon: Users, label: 'Staff' },
+    { href: '/dashboard/owner/services', icon: Scissors, label: 'Services' },
+    { href: '/dashboard/owner/products', icon: ShoppingBag, label: 'Products' },
+    { href: '/dashboard/owner/settings', icon: Settings, label: 'Settings' }
+  ],
+  [UserRole.BARBER]: [
+    { href: '/dashboard/barber', icon: LayoutDashboard, label: 'Overview' },
+    { href: '/dashboard/barber/schedule', icon: Calendar, label: 'Schedule' },
+    { href: '/dashboard/barber/profile', icon: Settings, label: 'Profile' }
+  ],
+  [UserRole.USER]: [
+    { href: '/dashboard/user', icon: LayoutDashboard, label: 'My Bookings' },
+    { href: '/dashboard/user/shops', icon: Scissors, label: 'Find Shops' },
+    { href: '/dashboard/user/history', icon: Activity, label: 'History' }
+  ],
+  [UserRole.SUPER_ADMIN]: [
+    { href: '/dashboard/admin', icon: Shield, label: 'Admin Panel' },
+    { href: '/dashboard/activity', icon: Activity, label: 'Activity' }
+  ]
+};
+
+// Default nav for unauthenticated or unknown roles
+const defaultNav = [
+  { href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' }
+];
 
 export default function DashboardLayout({
   children
@@ -14,19 +60,20 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  const navItems = [
-    { href: '/dashboard', icon: Users, label: 'Team' },
-    { href: '/dashboard/general', icon: Settings, label: 'General' },
-    { href: '/dashboard/activity', icon: Activity, label: 'Activity' },
-    { href: '/dashboard/security', icon: Shield, label: 'Security' }
-  ];
+  // Fetch user data to determine role
+  const { data: user } = useSWR<User>('/api/user', fetcher);
+
+  // Get nav items based on user role
+  const navItems = user && user.role && navConfig[user.role as UserRole]
+    ? navConfig[user.role as UserRole]
+    : defaultNav;
 
   return (
     <div className="flex flex-col min-h-[calc(100dvh-68px)] max-w-7xl mx-auto w-full">
       {/* Mobile header */}
       <div className="lg:hidden flex items-center justify-between bg-white border-b border-gray-200 p-4">
         <div className="flex items-center">
-          <span className="font-medium">Settings</span>
+          <span className="font-medium">Menu</span>
         </div>
         <Button
           className="-mr-3"

@@ -1,4 +1,8 @@
 import type { Config } from 'drizzle-kit';
+import dotenv from 'dotenv';
+
+// Load .env for CLI tools like drizzle-kit when run locally
+dotenv.config();
 
 export default {
   schema: './lib/db/schema.ts',

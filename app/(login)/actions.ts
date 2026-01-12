@@ -125,10 +125,58 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
 
   const passwordHash = await hashPassword(password);
 
+  // Default role is 'user' for standard sign-ups
+  let userRole: 'user' | 'barber' | 'owner' = 'user';
+  let teamId: number | undefined;
+  let createdTeam: typeof teams.$inferSelect | null = null;
+  let validInvitation: typeof invitations.$inferSelect | null = null;
+
+  // Check if inviteId is provided OR check for pending invitation by email
+  let invitation: typeof invitations.$inferSelect | null = null;
+
+  if (inviteId && inviteId.trim() !== '') {
+    // Check invitation by ID
+    [invitation] = await db
+      .select()
+      .from(invitations)
+      .where(
+        and(
+          eq(invitations.id, parseInt(inviteId)),
+          eq(invitations.status, 'pending')
+        )
+      )
+      .limit(1);
+  } else {
+    // AUTO-DETECT: Check for any pending invitation matching this email
+    [invitation] = await db
+      .select()
+      .from(invitations)
+      .where(
+        and(
+          eq(invitations.email, email),
+          eq(invitations.status, 'pending')
+        )
+      )
+      .limit(1);
+  }
+
+  if (invitation) {
+    // Inherit role from invitation
+    userRole = invitation.role as 'user' | 'barber' | 'owner';
+    teamId = invitation.teamId;
+    validInvitation = invitation;
+
+    [createdTeam] = await db
+      .select()
+      .from(teams)
+      .where(eq(teams.id, teamId))
+      .limit(1);
+  }
+
   const newUser: NewUser = {
     email,
     passwordHash,
-    role: 'owner' // Default role, will be overridden if there's an invitation
+    role: userRole
   };
 
   const [createdUser] = await db.insert(users).values(newUser).returning();
@@ -141,81 +189,29 @@ export const signUp = validatedAction(signUpSchema, async (data, formData) => {
     };
   }
 
-  let teamId: number;
-  let userRole: string;
-  let createdTeam: typeof teams.$inferSelect | null = null;
+  // Handle invitation acceptance after user is created
+  if (validInvitation) {
+    await db
+      .update(invitations)
+      .set({ status: 'accepted' })
+      .where(eq(invitations.id, validInvitation.id));
 
-  if (inviteId) {
-    // Check if there's a valid invitation
-    const [invitation] = await db
-      .select()
-      .from(invitations)
-      .where(
-        and(
-          eq(invitations.id, parseInt(inviteId)),
-          eq(invitations.email, email),
-          eq(invitations.status, 'pending')
-        )
-      )
-      .limit(1);
+    await logActivity(teamId!, createdUser.id, ActivityType.ACCEPT_INVITATION);
 
-    if (invitation) {
-      teamId = invitation.teamId;
-      userRole = invitation.role;
-
-      await db
-        .update(invitations)
-        .set({ status: 'accepted' })
-        .where(eq(invitations.id, invitation.id));
-
-      await logActivity(teamId, createdUser.id, ActivityType.ACCEPT_INVITATION);
-
-      [createdTeam] = await db
-        .select()
-        .from(teams)
-        .where(eq(teams.id, teamId))
-        .limit(1);
-    } else {
-      return { error: 'Invalid or expired invitation.', email, password };
-    }
-  } else {
-    // Create a new team if there's no invitation
-    const newTeam: NewTeam = {
-      name: `${email}'s Team`
+    // Create team membership for invited users
+    const newTeamMember: NewTeamMember = {
+      userId: createdUser.id,
+      teamId: teamId!,
+      role: userRole
     };
 
-    [createdTeam] = await db.insert(teams).values(newTeam).returning();
-
-    if (!createdTeam) {
-      return {
-        error: 'Failed to create team. Please try again.',
-        email,
-        password
-      };
-    }
-
-    teamId = createdTeam.id;
-    userRole = 'owner';
-
-    await logActivity(teamId, createdUser.id, ActivityType.CREATE_TEAM);
-  }
-
-  const newTeamMember: NewTeamMember = {
-    userId: createdUser.id,
-    teamId: teamId,
-    role: userRole
-  };
-
-  await Promise.all([
-    db.insert(teamMembers).values(newTeamMember),
-    logActivity(teamId, createdUser.id, ActivityType.SIGN_UP),
-    setSession(createdUser)
-  ]);
-
-  const redirectTo = formData.get('redirect') as string | null;
-  if (redirectTo === 'checkout') {
-    const priceId = formData.get('priceId') as string;
-    return createCheckoutSession({ team: createdTeam, priceId });
+    await Promise.all([
+      db.insert(teamMembers).values(newTeamMember),
+      setSession(createdUser)
+    ]);
+  } else {
+    // Standard user sign-up - no team creation, just set session
+    await setSession(createdUser);
   }
 
   redirect('/dashboard');
@@ -393,7 +389,7 @@ export const removeTeamMember = validatedActionWithUser(
 
 const inviteTeamMemberSchema = z.object({
   email: z.string().email('Invalid email address'),
-  role: z.enum(['member', 'owner'])
+  role: z.enum(['barber', 'owner'])
 });
 
 export const inviteTeamMember = validatedActionWithUser(
@@ -455,5 +451,44 @@ export const inviteTeamMember = validatedActionWithUser(
     // await sendInvitationEmail(email, userWithTeam.team.name, role)
 
     return { success: 'Invitation sent successfully' };
+  }
+);
+
+const revokeInvitationSchema = z.object({
+  invitationId: z.coerce.number()
+});
+
+export const revokeInvitation = validatedActionWithUser(
+  revokeInvitationSchema,
+  async (data, _, user) => {
+    const { invitationId } = data;
+    const userWithTeam = await getUserWithTeam(user.id);
+
+    if (!userWithTeam?.teamId) {
+      return { error: 'User is not part of a team' };
+    }
+
+    // Verify the invitation belongs to this team
+    const [invitation] = await db
+      .select()
+      .from(invitations)
+      .where(
+        and(
+          eq(invitations.id, invitationId),
+          eq(invitations.teamId, userWithTeam.teamId),
+          eq(invitations.status, 'pending')
+        )
+      )
+      .limit(1);
+
+    if (!invitation) {
+      return { error: 'Invitation not found or already processed' };
+    }
+
+    await db
+      .delete(invitations)
+      .where(eq(invitations.id, invitationId));
+
+    return { success: 'Invitation revoked successfully' };
   }
 );

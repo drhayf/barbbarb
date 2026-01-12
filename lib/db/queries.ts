@@ -1,6 +1,6 @@
 import { desc, and, eq, isNull } from 'drizzle-orm';
 import { db } from './drizzle';
-import { activityLogs, teamMembers, teams, users } from './schema';
+import { activityLogs, teamMembers, teams, users, posts } from './schema';
 import { cookies } from 'next/headers';
 import { verifyToken } from '@/lib/auth/session';
 
@@ -99,6 +99,46 @@ export async function getActivityLogs() {
     .limit(10);
 }
 
+// ============================================
+// PUBLIC FEED QUERIES (Storefront)
+// ============================================
+
+export interface PublicPost {
+  id: number;
+  type: 'portfolio' | 'announcement';
+  title: string | null;
+  imageUrl: string | null;
+  caption: string | null;
+  createdAt: Date;
+  barber: {
+    id: number;
+    name: string | null;
+    avatarUrl: string | null;
+  } | null;
+}
+
+export async function getPublicFeed(): Promise<PublicPost[]> {
+  const result = await db
+    .select({
+      id: posts.id,
+      type: posts.type,
+      title: posts.title,
+      imageUrl: posts.imageUrl,
+      caption: posts.caption,
+      createdAt: posts.createdAt,
+      barber: {
+        id: users.id,
+        name: users.name,
+        avatarUrl: users.avatarUrl,
+      },
+    })
+    .from(posts)
+    .leftJoin(users, eq(posts.barberId, users.id))
+    .orderBy(desc(posts.createdAt));
+
+  return result;
+}
+
 export async function getTeamForUser() {
   const user = await getUser();
   if (!user) {
@@ -127,4 +167,45 @@ export async function getTeamForUser() {
   });
 
   return result?.team || null;
+}
+
+// ============================================
+// TEAM POSTS QUERIES (Owner Feed Management)
+// ============================================
+
+export interface TeamPost {
+  id: number;
+  type: 'portfolio' | 'announcement';
+  title: string | null;
+  imageUrl: string | null;
+  caption: string | null;
+  createdAt: Date;
+  barber: {
+    id: number;
+    name: string | null;
+    avatarUrl: string | null;
+  } | null;
+}
+
+export async function getTeamPosts(teamId: number): Promise<TeamPost[]> {
+  const result = await db
+    .select({
+      id: posts.id,
+      type: posts.type,
+      title: posts.title,
+      imageUrl: posts.imageUrl,
+      caption: posts.caption,
+      createdAt: posts.createdAt,
+      barber: {
+        id: users.id,
+        name: users.name,
+        avatarUrl: users.avatarUrl,
+      },
+    })
+    .from(posts)
+    .leftJoin(users, eq(posts.barberId, users.id))
+    .where(eq(posts.teamId, teamId))
+    .orderBy(desc(posts.createdAt));
+
+  return result;
 }
